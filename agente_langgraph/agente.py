@@ -24,7 +24,7 @@ class State(TypedDict):
 all_tools = local_tools + mcp_tools_list
 
 # Se inyectan las herramientas al LLM
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0) # Asume OPENAI_API_KEY
+llm = ChatOpenAI(model="gpt-5.4", temperature=0.2, streaming=True) # Asume OPENAI_API_KEY
 llm_with_tools = llm.bind_tools(all_tools)
 
 # Nodo principal: El LLM decide qué hacer
@@ -32,7 +32,7 @@ def chatbot(state: State):
     # Verificamos si ya hay un SystemMessage. Si no, lo inyectamos al inicio del historial de este turno
     messages = state["messages"]
     if not messages or not isinstance(messages[0], SystemMessage):
-        sys_msg = SystemMessage(content="Eres un asistente estricto. Cuando el usuario te pregunte algo, DEBES buscar SIEMPRE en la base de hechos usando 'search_best_hecho' o 'rag_hechos' PRIMERO. Bajo ninguna circunstancia uses tu conocimiento previo interno. Si la respuesta a su pregunta no se encuentra en las herramientas y en la base de datos de hechos, simplemente debes responder 'No lo sé.' de manera directa.")
+        sys_msg = SystemMessage(content="You are a research assistant. ALWAYS answer in spanish. Don't use information that is not in the sources. Objective: Synthesize findings into clear answers with sources. Keep track of your research and the user info in the mcp_hechos. IMPORTANT: When you use search_web and get results, you MUST pass ALL the URLs to scrape_web in a single call. Do not skip any URL.")
         messages = [sys_msg] + messages
     return {"messages": [llm_with_tools.invoke(messages)]}
 

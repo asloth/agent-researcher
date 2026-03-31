@@ -92,6 +92,52 @@ def rag_hechos(query: str) -> str:
     except Exception as e:
         return f"❌ Error recuperando contexto: {str(e)}"
 
+@mcp.tool()
+def rag_pdf(url: str, query: str = None, chunk_range: str = None) -> str:
+    """
+    Retrieves PDF content from LanceDB. 
+    - Use 'chunk_range' (e.g. "5-10") to read specific sections found in the index.
+    - Use 'query' to perform a semantic search within that specific PDF.
+    """
+
+    if chunk_range:
+        try:
+            table = db.open_table("pdf_chunks")
+            start, end = map(int, chunk_range.split('-'))
+            
+            filter_stmt = f"source_url = '{url}' AND chunk_index BETWEEN {start} AND {end}"
+            
+            results = table.search().where(filter_stmt).to_pandas().sort_values("chunk_index") # Critical to keep the text in order
+            
+            
+            if results.empty:
+                return f"No data encontrada para {url} en el rango {chunk_range}."
+
+            context = "\n\n".join(results["texto"].tolist())
+            return f"--- Retrieved Chunks {chunk_range} ---\n\n{context}"
+            
+        except Exception as e:
+            return f"Error realizando la busqueda por chunk_range:  {str(e)}"
+
+    if query:
+        table = db.open_table("pdf_chunks")
+        query_vec = get_embedding(query)
+        results = table.search(query_vec).where(f"source_url = '{url}'").limit(5).to_pandas()
+        
+        
+        if results.empty:
+            return "No se enconetraron resultados relevantes para la consulta."
+
+        output = []
+        for _, row in results.iterrows():
+            # Using your keys: page, chunk_index, and texto
+            header = f"[Page {row['page']}, Chunk {row['chunk_index']}]"
+            output.append(f"{header}\n{row['texto']}")
+
+        return f"--- Semantic Search Results ---\n\n" + "\n\n---\n\n".join(output)
+
+    return "Provide 'query' or 'chunk_range'."
+
 if __name__ == "__main__":
     # Ejecuta el servidor MCP comunicándose por standard input/output (stdio)
     mcp.run(transport="stdio")

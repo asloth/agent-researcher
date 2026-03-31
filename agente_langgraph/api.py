@@ -77,6 +77,7 @@ def get_hechos():
         
     import lancedb
     db = lancedb.connect(db_path)
+    # Buscamos la table 'hechos', si no existe, retornamos lista vacía
     if "hechos" not in db.table_names():
         return {"hechos": []}
         

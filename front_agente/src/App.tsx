@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import './index.css';
 
 interface ToolCall {
@@ -18,6 +20,12 @@ interface ChatResponse {
   history: MessageHistory[];
 }
 
+interface Hecho {
+  id: number;
+  contenido: string;
+  fecha: string;
+}
+
 type Tab = 'chat' | 'memory';
 
 const SUGGESTIONS = [
@@ -32,12 +40,25 @@ function App() {
   const [messages, setMessages] = useState<{ role: 'user' | 'agent'; content: string; history?: MessageHistory[] }[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('chat');
+  const [hechos, setHechos] = useState<Hecho[]>([]);
+  const [hechosLoading, setHechosLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  useEffect(() => {
+    if (activeTab === 'memory') {
+      setHechosLoading(true);
+      fetch('http://localhost:8000/api/hechos')
+        .then((res) => res.json())
+        .then((data: { hechos: Hecho[] }) => setHechos(data.hechos))
+        .catch(() => setHechos([]))
+        .finally(() => setHechosLoading(false));
+    }
+  }, [activeTab]);
 
   const sendMessage = async (text: string) => {
     if (!text.trim() || loading) return;
@@ -116,9 +137,24 @@ function App() {
           <div className="memory-icon">🧠</div>
           <h2 className="memory-heading">Memory</h2>
           <p className="memory-desc">
-            Memory allows the researcher to remember context across conversations.
-            This feature is coming soon.
+            Facts the researcher remembers across conversations.
           </p>
+          {hechosLoading ? (
+            <div className="typing" style={{ justifyContent: 'center', padding: '2rem' }}>
+              <span /><span /><span />
+            </div>
+          ) : hechos.length === 0 ? (
+            <p className="memory-desc">No memories yet.</p>
+          ) : (
+            <div className="hechos-list">
+              {hechos.map((h) => (
+                <div key={h.id} className="hecho-card">
+                  <p className="hecho-contenido">{h.contenido}</p>
+                  <span className="hecho-fecha">{h.fecha}</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ) : (
         <div className="main-content">
@@ -172,7 +208,13 @@ function App() {
                       })}
                     </div>
                   )}
-                  <div className="msg-bubble">{msg.content}</div>
+                  <div className="msg-bubble">
+                    {msg.role === 'agent' ? (
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                    ) : (
+                      msg.content
+                    )}
+                  </div>
                   {msg.role === 'user' && <span className="msg-label">YOU</span>}
                 </div>
               ))}
