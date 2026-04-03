@@ -26,7 +26,15 @@ interface Hecho {
   fecha: string;
 }
 
-type Tab = 'chat' | 'memory';
+interface PdfChunk {
+  texto: string;
+  source_url: string;
+  page: number;
+  chunk_index: number;
+  fecha: string;
+}
+
+type Tab = 'chat' | 'memory' | 'pdfs';
 
 const SUGGESTIONS = [
   '🔬 Summarize recent AI safety papers',
@@ -42,6 +50,9 @@ function App() {
   const [activeTab, setActiveTab] = useState<Tab>('chat');
   const [hechos, setHechos] = useState<Hecho[]>([]);
   const [hechosLoading, setHechosLoading] = useState(false);
+  const [pdfChunks, setPdfChunks] = useState<PdfChunk[]>([]);
+  const [pdfChunksLoading, setPdfChunksLoading] = useState(false);
+  const [selectedChunk, setSelectedChunk] = useState<PdfChunk | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -57,6 +68,14 @@ function App() {
         .then((data: { hechos: Hecho[] }) => setHechos(data.hechos))
         .catch(() => setHechos([]))
         .finally(() => setHechosLoading(false));
+    }
+    if (activeTab === 'pdfs') {
+      setPdfChunksLoading(true);
+      fetch('http://localhost:8000/api/pdf-chunks')
+        .then((res) => res.json())
+        .then((data: { chunks: PdfChunk[] }) => setPdfChunks(data.chunks))
+        .catch(() => setPdfChunks([]))
+        .finally(() => setPdfChunksLoading(false));
     }
   }, [activeTab]);
 
@@ -128,11 +147,69 @@ function App() {
           >
             MEMORY
           </button>
+          <button
+            className={`nav-tab ${activeTab === 'pdfs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('pdfs')}
+          >
+            PDFs
+          </button>
         </nav>
       </header>
 
       {/* Main content */}
-      {activeTab === 'memory' ? (
+      {activeTab === 'pdfs' ? (
+        <div className="memory-panel">
+          <div className="memory-icon">📄</div>
+          <h2 className="memory-heading">PDF Chunks</h2>
+          <p className="memory-desc">
+            Indexed PDF chunks stored in the vector database. Click a card to see the full content.
+          </p>
+          {pdfChunksLoading ? (
+            <div className="typing" style={{ justifyContent: 'center', padding: '2rem' }}>
+              <span /><span /><span />
+            </div>
+          ) : pdfChunks.length === 0 ? (
+            <p className="memory-desc">No PDF chunks indexed yet.</p>
+          ) : (
+            <div className="hechos-list">
+              {pdfChunks.map((chunk, i) => (
+                <div key={i} className="hecho-card chunk-card" onClick={() => setSelectedChunk(chunk)}>
+                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                    <span className="tool-badge local" style={{ fontSize: '0.7rem' }}>Page {chunk.page}</span>
+                    <span className="tool-badge mcp" style={{ fontSize: '0.7rem' }}>Chunk {chunk.chunk_index}</span>
+                  </div>
+                  <p className="hecho-contenido chunk-preview">{chunk.texto}</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                    <span className="hecho-fecha" style={{ fontSize: '0.65rem', opacity: 0.6, wordBreak: 'break-all' }}>{chunk.source_url}</span>
+                    <span className="hecho-fecha">{chunk.fecha}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {selectedChunk && (
+            <div className="modal-overlay" onClick={() => setSelectedChunk(null)}>
+              <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-header">
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span className="tool-badge local" style={{ fontSize: '0.7rem' }}>Page {selectedChunk.page}</span>
+                    <span className="tool-badge mcp" style={{ fontSize: '0.7rem' }}>Chunk {selectedChunk.chunk_index}</span>
+                  </div>
+                  <button className="modal-close" onClick={() => setSelectedChunk(null)}>✕</button>
+                </div>
+                <div className="modal-body">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{selectedChunk.texto}</ReactMarkdown>
+                </div>
+                <div className="modal-footer">
+                  <span className="hecho-fecha" style={{ wordBreak: 'break-all' }}>{selectedChunk.source_url}</span>
+                  <span className="hecho-fecha">{selectedChunk.fecha}</span>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : activeTab === 'memory' ? (
         <div className="memory-panel">
           <div className="memory-icon">🧠</div>
           <h2 className="memory-heading">Memory</h2>

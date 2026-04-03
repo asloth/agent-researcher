@@ -50,9 +50,25 @@ async def mcp_rag_hechos(query: str) -> str:
     res = await mcp_session.call_tool("rag_hechos", arguments={"query": query})
     return res.content[0].text
 
+async def mcp_rag_pdfs(url: str, chunk_range: str = None, query: str = None) -> str:
+    """Busca informacion especifica dentro de un PDF utilizando RAG en el MCP. Puedes ir directamente a una sección específica del PDF o hacer una búsqueda semántica dentro de él.
+        - 'url' es la dirección del PDF a analizar.
+        - Use 'chunk_range' (e.g. "5-10") to read specific sections from the structural map.
+        - Use 'query' to semantically search within that PDF.
+    """
+    global mcp_session
+    arguments = {"url": url}
+    if query:
+        arguments["query"] = query
+    if chunk_range:
+        arguments["chunk_range"] = chunk_range
+    res = await mcp_session.call_tool("rag_pdf", arguments=arguments)
+    return res.content[0].text
+
 # Exportamos la lista de "Tools" que vienen del MCP
 mcp_tools_list = [
     mcp_guardar_si_es_hecho,
     mcp_search_best_hecho,
-    mcp_rag_hechos
+    mcp_rag_hechos,
+    mcp_rag_pdfs
 ]

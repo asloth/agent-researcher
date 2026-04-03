@@ -9,7 +9,12 @@ load_dotenv()
 sys.path.append(os.path.dirname(__file__))
 
 def search_web(query: str) -> str:
-    """Búsqueda de informacion en la web."""
+    """Search the web for information. Returns a list of results with URLs and snippets.
+   
+      After getting results, you MUST process the URLs:
+      - PDF URLs (.pdf) → use process_pdf
+      - Web page URLs → use scrape_web
+      """
     from tavily import TavilyClient
     client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
     response = client.search(
@@ -20,7 +25,11 @@ def search_web(query: str) -> str:
     return response['results'] 
 
 def scrape_web(urls: list[str], query: str) -> str:                                                                                                                                                                                                
-    """Extrae y resume el contenido de múltiples páginas web. Recibe una lista de URLs y resume cada una. Siempre pasa TODAS las URLs disponibles. Usa 'query' para enfocar el resumen en lo relevante."""
+    """Extract and summarize content from HTML web pages. Pass all page URLs in one call.
+   
+      DO NOT use for PDF links — PDFs must go through process_pdf instead.
+      Use 'query' to focus the summary on what's relevant to the research.
+      """
     import trafilatura                                                                                                                                                                                                                      
     from langchain_openai import ChatOpenAI
     results = []
@@ -50,8 +59,11 @@ def scrape_web(urls: list[str], query: str) -> str:
 
 def process_pdf(url: str) -> str:
     """
-    Downloads, chunks, and indexes a PDF. Returns a structural map 
-    of the document including sections, page numbers, and chunk ranges.
+    Download a PDF from a URL, split it into chunks, and index it in the vector database.
+   
+      Use this when a URL points to a PDF file (contains .pdf in the URL).
+      Returns a structural map with title, abstract, sections, and chunk ranges.
+      After indexing, use rag_pdf to query specific content from the PDF.
     """
     import httpx
     import pymupdf4llm
@@ -72,12 +84,21 @@ def process_pdf(url: str) -> str:
     file_path = os.path.join("papers", clean_filename)
 
     if not os.path.exists(file_path):
-        with httpx.Client(follow_redirects=True, timeout=60.0) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            with open(file_path, "wb") as f:
-                f.write(resp.content)
-    pages = pymupdf4llm.to_markdown(file_path, page_chunks=True)
+        try:
+            with httpx.Client(follow_redirects=True, timeout=60.0) as client:
+                resp = client.get(url)
+                resp.raise_for_status()
+                with open(file_path, "wb") as f:
+                    f.write(resp.content)
+        except httpx.HTTPStatusError as e:
+            return f"❌ Could not download PDF (HTTP {e.response.status_code}): {url}"
+        except httpx.RequestError as e:
+            return f"❌ Could not download PDF (connection error): {url}"
+
+    try:
+        pages = pymupdf4llm.to_markdown(file_path, page_chunks=True)
+    except Exception as e:
+        return f"❌ Could not parse PDF: {url} — {str(e)}"
 
     # --- First pass: chunk text and extract structure ---
     chunks_to_store = []
@@ -163,4 +184,40 @@ def process_pdf(url: str) -> str:
     )
 
 
-local_tools = [search_web, scrape_web, process_pdf]
+def rag_pdf_local(url: str, query: str) -> str:
+    """Search within a previously indexed PDF by semantic query.
+    Use this after process_pdf to find specific content in a PDF you already indexed.
+    Requires the same 'url' that was passed to process_pdf.
+    """
+    import lancedb
+    from openai import OpenAI
+
+    db_path = os.path.join(os.path.dirname(__file__), "..", "mcp_hechos", "hechos_lancedb")
+    db = lancedb.connect(db_path)
+
+    if "pdf_chunks" not in db.table_names():
+        return "❌ No PDFs have been indexed yet."
+
+    try:
+        openai_client = OpenAI()
+        query_vec = openai_client.embeddings.create(
+            input=[query], model="text-embedding-3-small"
+        ).data[0].embedding
+
+        table = db.open_table("pdf_chunks")
+        results = table.search(query_vec).where(f"source_url = '{url}'").limit(5).to_pandas()
+
+        if results.empty:
+            return f"❌ No relevant results found for query in PDF: {url}"
+
+        output = []
+        for _, row in results.iterrows():
+            header = f"[Page {row['page']}, Chunk {row['chunk_index']}]"
+            output.append(f"{header}\n{row['texto']}")
+
+        return f"--- Semantic Search Results for '{query}' ---\n\n" + "\n\n---\n\n".join(output)
+    except Exception as e:
+        return f"❌ Error querying PDF: {str(e)}"
+
+
+local_tools = [search_web, scrape_web, process_pdf, rag_pdf_local]

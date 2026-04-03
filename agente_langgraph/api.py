@@ -92,3 +92,36 @@ def get_hechos():
     rows.sort(key=lambda x: x["fecha"], reverse=True)
     
     return {"hechos": [{"id": len(rows) - i, "contenido": r["texto"], "fecha": r["fecha"]} for i, r in enumerate(rows)]}
+
+@app.get("/api/pdf-chunks")
+def get_pdf_chunks():
+    """
+    Endpoint para listar los chunks de PDFs indexados en LanceDB.
+    """
+    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mcp_hechos", "hechos_lancedb"))
+    if not os.path.exists(db_path):
+        return {"chunks": []}
+
+    import lancedb
+    db = lancedb.connect(db_path)
+    if "pdf_chunks" not in db.table_names():
+        return {"chunks": []}
+
+    tbl = db.open_table("pdf_chunks")
+    rows = tbl.to_arrow().to_pylist()
+
+    if not rows:
+        return {"chunks": []}
+
+    rows.sort(key=lambda x: (x.get("source_url", ""), x.get("chunk_index", 0)))
+
+    return {"chunks": [
+        {
+            "texto": r["texto"],
+            "source_url": r.get("source_url", ""),
+            "page": r.get("page", 0),
+            "chunk_index": r.get("chunk_index", 0),
+            "fecha": r.get("fecha", ""),
+        }
+        for r in rows
+    ]}

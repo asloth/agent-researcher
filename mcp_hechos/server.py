@@ -74,7 +74,10 @@ def search_best_hecho(query: str) -> str:
 @mcp.tool()
 def rag_hechos(query: str) -> str:
     """
-    Genera un contexto recuperando los 5 hechos más cercanos semánticamente (RAG vectorial).
+    Retrieve index of pdf chunks that are relevant to the query, and return the text of those chunks as context.
+   
+      - Use 'query' to semantically search for info of the previosly processed PDF.
+      Requires the same 'url' that was passed to process_pdf.
     """
     if "hechos" not in db.table_names():
         return "❌ No hay contexto en la DB."
@@ -94,10 +97,11 @@ def rag_hechos(query: str) -> str:
 
 @mcp.tool()
 def rag_pdf(url: str, query: str = None, chunk_range: str = None) -> str:
-    """
-    Retrieves PDF content from LanceDB. 
-    - Use 'chunk_range' (e.g. "5-10") to read specific sections found in the index.
-    - Use 'query' to perform a semantic search within that specific PDF.
+    """Read content from a PDF that was previously indexed with process_pdf.
+
+    - Use 'chunk_range' (e.g. "5-10") to read specific sections from the structural map.
+    - Use 'query' to semantically search within that PDF.
+    Requires the same 'url' that was passed to process_pdf.
     """
 
     if chunk_range:
@@ -126,7 +130,7 @@ def rag_pdf(url: str, query: str = None, chunk_range: str = None) -> str:
         
         
         if results.empty:
-            return "No se enconetraron resultados relevantes para la consulta."
+            return "No se encontraron resultados relevantes para la consulta."
 
         output = []
         for _, row in results.iterrows():
