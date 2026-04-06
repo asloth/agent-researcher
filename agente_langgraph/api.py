@@ -1,5 +1,7 @@
+import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import os
 
@@ -58,11 +60,84 @@ async def chat_endpoint(request: ChatRequest):
             })
             
         return {
-            "response": result["messages"][-1].content, 
-            "history": log_msgs
+            "response": result["messages"][-1].content,
+            "history": log_msgs,
+            "workers": [
+                {
+                    "angle": wr["angle"],
+                    "findings": wr["findings"],
+                    "sources": wr["sources"],
+                }
+                for wr in (
+                    result.get("worker_results", [])[-len(result.get("research_angles", [])):]
+                    if result.get("research_angles") else []
+                )
+            ],
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/chat/stream")
+async def chat_stream_endpoint(request: ChatRequest):
+    """
+    Streaming variant of /api/chat. Returns Server-Sent Events with progress updates:
+      - {"type": "planner", "angles": [...]}      planner chose to research
+      - {"type": "direct", "content": "..."}      planner answered without research
+      - {"type": "worker_done", "angle": "...", "findings": "...", "sources": [...]}
+      - {"type": "token", "text": "..."}          synthesizer streaming tokens
+      - {"type": "done"}                          graph finished
+      - {"type": "error", "message": "..."}       something blew up
+    """
+    config = {"configurable": {"thread_id": "1"}}
+    input_message = HumanMessage(content=request.message)
+
+    async def event_generator():
+        def sse(payload: dict) -> str:
+            return f"data: {json.dumps(payload)}\n\n"
+
+        try:
+            async for mode, chunk in graph.astream(
+                {"messages": [input_message]},
+                config,
+                stream_mode=["updates", "messages"],
+            ):
+                if mode == "updates":
+                    # chunk is {node_name: state_update}
+                    for node_name, update in chunk.items():
+                        if node_name == "planner":
+                            if update.get("research_angles"):
+                                yield sse({"type": "planner", "angles": update["research_angles"]})
+                            elif update.get("messages"):
+                                # Direct-response path (no research needed)
+                                yield sse({"type": "direct", "content": update["messages"][-1].content})
+                        elif node_name == "research_worker":
+                            # Each worker finishing produces its own update with one WorkerResult
+                            for wr in update.get("worker_results", []):
+                                yield sse({
+                                    "type": "worker_done",
+                                    "angle": wr["angle"],
+                                    "findings": wr["findings"],
+                                    "sources": wr["sources"],
+                                })
+                        # synthesizer 'updates' event is redundant — tokens already streamed
+                elif mode == "messages":
+                    # chunk is (AIMessageChunk, metadata)
+                    msg_chunk, metadata = chunk
+                    if metadata.get("langgraph_node") == "synthesizer":
+                        text = getattr(msg_chunk, "content", "") or ""
+                        if text:
+                            yield sse({"type": "token", "text": text})
+
+            yield sse({"type": "done"})
+        except Exception as e:
+            yield sse({"type": "error", "message": str(e)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
 
 @app.get("/api/hechos")
 def get_hechos():

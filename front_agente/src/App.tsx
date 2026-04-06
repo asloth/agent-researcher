@@ -15,9 +15,15 @@ interface MessageHistory {
   name?: string;
 }
 
-interface ChatResponse {
-  response: string;
-  history: MessageHistory[];
+interface WorkerProgress {
+  angle: string;
+  findings: string;
+  sources: string[];
+}
+
+interface Progress {
+  angles: string[];
+  workers: WorkerProgress[];
 }
 
 interface Hecho {
@@ -45,7 +51,13 @@ const SUGGESTIONS = [
 
 function App() {
   const [input, setInput] = useState('');
-  const [messages, setMessages] = useState<{ role: 'user' | 'agent'; content: string; history?: MessageHistory[] }[]>([]);
+  const [messages, setMessages] = useState<{
+    role: 'user' | 'agent';
+    content: string;
+    history?: MessageHistory[];
+    progress?: Progress;
+    streaming?: boolean;
+  }[]>([]);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<Tab>('chat');
   const [hechos, setHechos] = useState<Hecho[]>([]);
@@ -82,22 +94,91 @@ function App() {
   const sendMessage = async (text: string) => {
     if (!text.trim() || loading) return;
 
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    setMessages((prev) => [
+      ...prev,
+      { role: 'user', content: text },
+      { role: 'agent', content: '', streaming: true, progress: { angles: [], workers: [] } },
+    ]);
     setInput('');
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
     setLoading(true);
 
+    // Mutate the last (assistant) message in-place via functional updates
+    const updateLast = (updater: (m: typeof messages[number]) => typeof messages[number]) => {
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = updater(next[next.length - 1]);
+        return next;
+      });
+    };
+
     try {
-      const res = await fetch('http://localhost:8000/api/chat', {
+      const res = await fetch('http://localhost:8000/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text })
+        body: JSON.stringify({ message: text }),
       });
-      const data: ChatResponse = await res.json();
-      setMessages((prev) => [...prev, { role: 'agent', content: data.response, history: data.history }]);
+      if (!res.body) throw new Error('No response body');
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          const line = part.trim();
+          if (!line.startsWith('data:')) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+
+          let evt: any;
+          try {
+            evt = JSON.parse(payload);
+          } catch {
+            continue;
+          }
+
+          switch (evt.type) {
+            case 'planner':
+              updateLast((m) => ({ ...m, progress: { angles: evt.angles, workers: m.progress?.workers || [] } }));
+              break;
+            case 'direct':
+              updateLast((m) => ({ ...m, content: evt.content }));
+              break;
+            case 'worker_done':
+              updateLast((m) => ({
+                ...m,
+                progress: {
+                  angles: m.progress?.angles || [],
+                  workers: [
+                    ...(m.progress?.workers || []),
+                    { angle: evt.angle, findings: evt.findings, sources: evt.sources },
+                  ],
+                },
+              }));
+              break;
+            case 'token':
+              updateLast((m) => ({ ...m, content: m.content + evt.text }));
+              break;
+            case 'done':
+              updateLast((m) => ({ ...m, streaming: false }));
+              break;
+            case 'error':
+              updateLast((m) => ({ ...m, content: `Error: ${evt.message}`, streaming: false }));
+              break;
+          }
+        }
+      }
     } catch (error) {
       console.error(error);
-      setMessages((prev) => [...prev, { role: 'agent', content: 'Error connecting to backend.' }]);
+      updateLast((m) => ({ ...m, content: 'Error connecting to backend.', streaming: false }));
     } finally {
       setLoading(false);
     }
@@ -263,6 +344,33 @@ function App() {
               {messages.map((msg, idx) => (
                 <div key={idx} className={`msg ${msg.role === 'user' ? 'user' : 'assistant'}`}>
                   {msg.role === 'agent' && <span className="msg-label">RESEARCHER</span>}
+                  {msg.role === 'agent' && msg.progress && (msg.progress.angles.length > 0 || msg.progress.workers.length > 0) && (
+                    <div className="thought-process">
+                      {msg.progress.angles.length > 0 && (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', marginBottom: '0.5rem' }}>
+                          <span style={{ fontSize: '0.7rem', opacity: 0.6, alignSelf: 'center' }}>PLAN:</span>
+                          {msg.progress.angles.map((a, i) => {
+                            const done = i < msg.progress!.workers.length;
+                            return (
+                              <span key={i} className={`tool-badge ${done ? 'local' : 'mcp'}`} style={{ fontSize: '0.7rem' }}>
+                                {done ? '✓' : '…'} {a}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                      {msg.progress.workers.map((w, i) => (
+                        <div key={`w-${i}`} className="tool-result" style={{ marginBottom: '0.4rem' }}>
+                          <strong>✓ {w.angle}</strong>
+                          {w.sources.length > 0 && (
+                            <div style={{ fontSize: '0.7rem', opacity: 0.7, marginTop: '0.25rem' }}>
+                              {w.sources.length} source{w.sources.length === 1 ? '' : 's'}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {msg.role === 'agent' && msg.history && (
                     <div className="thought-process">
                       {msg.history.map((h, i) => {
@@ -285,24 +393,21 @@ function App() {
                       })}
                     </div>
                   )}
-                  <div className="msg-bubble">
-                    {msg.role === 'agent' ? (
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
-                    ) : (
-                      msg.content
-                    )}
-                  </div>
+                  {msg.role === 'agent' && msg.streaming && !msg.content && (
+                    <div className="typing"><span /><span /><span /></div>
+                  )}
+                  {(msg.role === 'user' || msg.content) && (
+                    <div className="msg-bubble">
+                      {msg.role === 'agent' ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                      ) : (
+                        msg.content
+                      )}
+                    </div>
+                  )}
                   {msg.role === 'user' && <span className="msg-label">YOU</span>}
                 </div>
               ))}
-              {loading && (
-                <div className="msg assistant">
-                  <span className="msg-label">RESEARCHER</span>
-                  <div className="typing">
-                    <span /><span /><span />
-                  </div>
-                </div>
-              )}
               <div ref={bottomRef} />
             </div>
           )}

@@ -1,88 +1,101 @@
-from typing import Annotated
-from typing_extensions import TypedDict
-import os
 from dotenv import load_dotenv
+from langgraph.graph import StateGraph, START, END
+from langchain_core.messages import SystemMessage, AIMessage, HumanMessage
+from pydantic import BaseModel
+from langgraph.types import Send
+from langchain_openai import ChatOpenAI
+from state import OverallState
+from worker import WORKER_SYSTEM_PROMPT, worker_subgraph
+from mcp_client import mcp_guardar_si_es_hecho
 
-# Carga las variables de entorno desde un archivo .env (vital para OPENAI_API_KEY)
+
 load_dotenv()
 
-from langgraph.graph import StateGraph, START, END
-from langgraph.graph.message import add_messages
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, ToolMessage, SystemMessage
-from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import ToolNode, tools_condition
+llm_planner = ChatOpenAI(model="gpt-5.4-mini", temperature=0.2, streaming=True) # Asume OPENAI_API_KEY
 
-# Importaciones locales (nuestras herramientas)
-from local_tools import local_tools
-from mcp_client import mcp_tools_list
+class PlannerOutput(BaseModel):
+    needs_research: bool
+    angles: list[str]          # populated if needs_research=True, else []
+    direct_response: str | None # populated if needs_research=False, else None
 
-# Definimos la memoria de estado del Agente
-class State(TypedDict):
-    messages: Annotated[list, add_messages]
-
-# Unimos todas las "Tools" de manera indistinta para el Agente
-all_tools = local_tools + mcp_tools_list
-
-# Se inyectan las herramientas al LLM
-llm = ChatOpenAI(model="gpt-5.4", temperature=0.2, streaming=True) # Asume OPENAI_API_KEY
-llm_with_tools = llm.bind_tools(all_tools)
-
-# Nodo principal: El LLM decide qué hacer
-def chatbot(state: State):
-    # Verificamos si ya hay un SystemMessage. Si no, lo inyectamos al inicio del historial de este turno
+def planner_node(state: OverallState) :
+    # Este nodo es un ejemplo de cómo podríamos usar el LLM para planificar la investigación
+    # Retorna una estructura indicando si se necesita investigación y qué ángulos seguir
     messages = state["messages"]
     if not messages or not isinstance(messages[0], SystemMessage):
-        sys_msg = SystemMessage(content="""You are a professional research assistant. ALWAYS answer in spanish.
-
-## Core Rules
-- Never answer from your own knowledge. Only use information retrieved from tools.
-- If no source is found, say so honestly.
-- Save important findings and user info with guardar_si_es_hecho.
-
-## Research Methodology
-When the user asks a question, conduct a THOROUGH investigation:
-
-1. **Plan your research**: Break the topic into 3-5 different search angles or threads. Think like a researcher — what subtopics, perspectives, or keywords would give you comprehensive coverage?
-
-2. **Execute multiple searches**: Run search_web for EACH angle. Do NOT stop after one search. A serious investigation needs at minimum 3 different search queries exploring different facets of the topic.
-
-3. **Process results from each search**:
-   - PDF URLs (.pdf in the URL) → use process_pdf to index them
-   - Regular web pages → use scrape_web to extract content
-   - NEVER send PDF URLs to scrape_web — it cannot parse them.
-   - NEVER send web pages to process_pdf.
-   - Pass all HTML URLs from a single search together in one scrape_web call.
-
-4. **Follow leads**: If a source mentions an interesting reference, study, or claim — do a follow-up search on it. Good research is iterative, not a single pass.
-
-5. **Save PDF index to memory**: After process_pdf returns the structural map (title, abstract, sections, chunk ranges), ALWAYS save it to memory using guardar_si_es_hecho. This way you can recall what PDFs you've processed and what's in them without reprocessing.
-
-6. **Query indexed PDFs**: Use rag_pdf to query specific sections of a processed PDF for deeper understanding. Check memory first to recall the structural map and know which chunks to request.
-
-7. **Synthesize**: Once you have enough sources (aim for 8-15 sources minimum), write a well-structured answer with inline citations. Organize by themes, not by source.
-
-## Answer Format
-- Structure with clear headings
-- Cite sources inline: [Fuente: título o URL]
-- End with a "Fuentes" section listing all sources used
-- Flag any contradictions between sources""")
+        sys_msg = SystemMessage(content="""Eres un asistente de investigacion. 
+            Analiza el mensaje del usuario y decide si necesitas hacer investigación usando herramientas para responder adecuadamente. 
+            Si necesitas investigar: needs_research=true, angles=[3-5 ángulos], direct_response=null. 
+            Si no: needs_research=false, angles=[], direct_response=tu respuesta.
+           """)
         messages = [sys_msg] + messages
-    return {"messages": [llm_with_tools.invoke(messages)]}
+    
+    llm_structured = llm_planner.with_structured_output(PlannerOutput)
+    plan = llm_structured.invoke(messages)   
+    if plan.needs_research:                                                                                                                                                                                                                      
+        return {"research_angles": plan.angles}
+    else:                                                                                                                                                                                                                                        
+        return {"messages": [AIMessage(content=plan.direct_response)]}
 
-# Nodo de herramientas proporcionado por LangGraph
-tool_node = ToolNode(all_tools)
+def route_after_planner(state: OverallState):
+    if len(state.get("research_angles") or []) > 0:
+        return [
+            Send("research_worker", {                                                                                                                                                                                                                
+                "messages": [
+                SystemMessage(content=WORKER_SYSTEM_PROMPT),                                                                                                                                                                                     
+                next(m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+            ],                                                                                                                                                                                                                                   
+            "angle": angle,
+            "iteration_count": 0,                                                                                                                                                                                                                
+          })                                                                                                                                                                                                                                       
+          for angle in state["research_angles"]
+        ]
+    else:
+        return END
+
+llm_synthe = ChatOpenAI(model="gpt-5.4", temperature=0.2, streaming=True) # Asume OPENAI_API_KEY
+
+async def synthesizer_node(state: OverallState):
+    # Only synthesize results from THIS turn. `worker_results` accumulates across
+    # turns via operator.add, but `research_angles` is overwritten each turn by the
+    # planner, so the current turn's results are the last N entries (N = angles).
+    n_current = len(state.get("research_angles", []))
+    current_results = state["worker_results"][-n_current:] if n_current else []
+
+    findings_text = "\n\n".join([
+      f"## Ángulo: {wr['angle']}\n\nHallazgos:\n{wr['findings']}\n\nFuentes:\n" +
+      "\n".join(f"- {s}" for s in wr['sources'])
+      for wr in current_results
+      ])
+    original_question = next(m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
+    synthesis_prompt = HumanMessage(content=f"""Pregunta original: {original_question}
+        Hallazgos de los investigadores:
+        {findings_text}
+        Sintetiza estos hallazgos en una respuesta final en español con citas.""")
+
+    response = await llm_synthe.ainvoke([synthesis_prompt])
+
+    # Persist the synthesized summary to MCP memory so future turns can recall it
+    try:
+        await mcp_guardar_si_es_hecho(response.content)
+    except Exception as e:
+        print(f"[synthesizer] mcp_guardar_si_es_hecho failed: {e}")
+
+    return {"messages": [response]}
+
 
 # Construcción de las aristas y el flujo del grafo
-graph_builder = StateGraph(State)
-graph_builder.add_node("chatbot", chatbot)
-graph_builder.add_node("tools", tool_node)
+graph_builder = StateGraph(OverallState)
+graph_builder.add_node("planner", planner_node)                                                                                                                                                                                              
+graph_builder.add_node("research_worker", worker_subgraph)  # from worker.py
+graph_builder.add_node("synthesizer", synthesizer_node)                                                                                                                                                                                      
+                  
+graph_builder.add_edge(START, "planner")                                                                                                                                                                                                     
+graph_builder.add_conditional_edges("planner", route_after_planner, ["research_worker", END])
+graph_builder.add_edge("research_worker", "synthesizer")                                                                                                                                                                                     
+graph_builder.add_edge("synthesizer", END)                                                                                                                                                                                                   
+                                                                                                                                                                                                                                               
 
-graph_builder.add_edge(START, "chatbot")
-# tools_condition redirige automáticamente si el LLM invocó alguna tool
-graph_builder.add_conditional_edges("chatbot", tools_condition)
-graph_builder.add_edge("tools", "chatbot")
-
-import os
 # Compilamos el grafo. Usar memoria Checkpointer. (por simplicidad, no en uso avanzado acá)
 from langgraph.checkpoint.memory import MemorySaver
 memory = MemorySaver()
