@@ -32,32 +32,32 @@ async def mcp_lifespan(app: FastAPI):
             print("❌ Desconectando MCP Hechos...")
             mcp_session = None
 
-async def mcp_guardar_si_es_hecho(texto: str) -> str:
+async def mcp_guardar_si_es_hecho(texto: str, project_id: str = "default") -> str:
     """Envía un hecho al servidor MCP para guardarlo en la base de datos de hechos."""
     global mcp_session
-    res = await mcp_session.call_tool("guardar_si_es_hecho", arguments={"texto": texto})
+    res = await mcp_session.call_tool("guardar_si_es_hecho", arguments={"texto": texto, "project_id": project_id})
     return res.content[0].text
 
-async def mcp_search_best_hecho(query: str) -> str:
+async def mcp_search_best_hecho(query: str, project_id: str = "default") -> str:
     """Busca el mejor hecho en el MCP utilizando palabras clave."""
     global mcp_session
-    res = await mcp_session.call_tool("search_best_hecho", arguments={"query": query})
+    res = await mcp_session.call_tool("search_best_hecho", arguments={"query": query, "project_id": project_id})
     return res.content[0].text
 
-async def mcp_rag_hechos(query: str) -> str:
+async def mcp_rag_hechos(query: str, project_id: str = "default") -> str:
     """Invoca la herramienta RAG del MCP para obtener contexto de los hechos anteriores."""
     global mcp_session
-    res = await mcp_session.call_tool("rag_hechos", arguments={"query": query})
+    res = await mcp_session.call_tool("rag_hechos", arguments={"query": query, "project_id": project_id})
     return res.content[0].text
 
-async def mcp_rag_pdfs(url: str, chunk_range: str = None, query: str = None) -> str:
+async def mcp_rag_pdfs(url: str, chunk_range: str = None, query: str = None, project_id: str = "default") -> str:
     """Busca informacion especifica dentro de un PDF utilizando RAG en el MCP. Puedes ir directamente a una sección específica del PDF o hacer una búsqueda semántica dentro de él.
         - 'url' es la dirección del PDF a analizar.
         - Use 'chunk_range' (e.g. "5-10") to read specific sections from the structural map.
         - Use 'query' to semantically search within that PDF.
     """
     global mcp_session
-    arguments = {"url": url}
+    arguments = {"url": url, "project_id": project_id}
     if query:
         arguments["query"] = query
     if chunk_range:

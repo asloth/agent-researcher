@@ -1,13 +1,14 @@
 import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 import os
 
 from agente import graph
 from langchain_core.messages import HumanMessage
 from mcp_client import mcp_lifespan
+from projects import list_projects, create_project, delete_project
 
 # Pasamos el manejador asíncrono que inicializa y destruye MCP limpiamente
 app = FastAPI(title="Agente Educacional MCP y LangGraph", lifespan=mcp_lifespan)
@@ -22,6 +23,28 @@ app.add_middleware(
 
 class ChatRequest(BaseModel):
     message: str
+    project_id: str
+
+
+class ProjectCreate(BaseModel):
+    name: str
+
+
+@app.get("/api/projects")
+def get_projects():
+    return {"projects": list_projects()}
+
+
+@app.post("/api/projects")
+def post_project(req: ProjectCreate):
+    return create_project(req.name)
+
+
+@app.delete("/api/projects/{project_id}")
+def remove_project(project_id: str):
+    if not delete_project(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+    return {"ok": True}
 
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
@@ -30,11 +53,9 @@ async def chat_endpoint(request: ChatRequest):
     Retorna tanto la respuesta textual como el historial detallado de las Tools que usó.
     """
     try:
-        # Configuración de memoria (el thread se fija a 1 para simular sesión continua)
-        config = {"configurable": {"thread_id": "1"}}
-        
+        config = {"configurable": {"thread_id": request.project_id, "project_id": request.project_id}}
+
         input_message = HumanMessage(content=request.message)
-        # Invocación asíncrona del grafo
         result = await graph.ainvoke({"messages": [input_message]}, config)
         
         # Procesamos solo la porción nueva del historial, omitiendo cosas de turnos anteriores
@@ -88,7 +109,7 @@ async def chat_stream_endpoint(request: ChatRequest):
       - {"type": "done"}                          graph finished
       - {"type": "error", "message": "..."}       something blew up
     """
-    config = {"configurable": {"thread_id": "1"}}
+    config = {"configurable": {"thread_id": request.project_id, "project_id": request.project_id}}
     input_message = HumanMessage(content=request.message)
 
     async def event_generator():
@@ -140,39 +161,29 @@ async def chat_stream_endpoint(request: ChatRequest):
 
 
 @app.get("/api/hechos")
-def get_hechos():
-    """
-    Endpoint auxiliar expuesto por el backend para el segundo frontend ('front_hechos')
-    Lee directamente SQLite. (Aunque la buena práctica podría ser exponer esto vía MCP también, 
-    para este ejercicio simple, lo servimos mediante la REST API).
-    """
+def get_hechos(project_id: str = "default"):
     db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mcp_hechos", "hechos_lancedb"))
     if not os.path.exists(db_path):
         return {"hechos": []}
-        
+
     import lancedb
     db = lancedb.connect(db_path)
-    # Buscamos la table 'hechos', si no existe, retornamos lista vacía
     if "hechos" not in db.table_names():
         return {"hechos": []}
-        
+
     tbl = db.open_table("hechos")
-    
-    # Extraemos y ordenamos sin usar Pandas para mantener el SDK ligero
     rows = tbl.to_arrow().to_pylist()
-    
+
     if not rows:
         return {"hechos": []}
-        
+
+    rows = [r for r in rows if r.get("project_id", "default") == project_id]
     rows.sort(key=lambda x: x["fecha"], reverse=True)
-    
+
     return {"hechos": [{"id": len(rows) - i, "contenido": r["texto"], "fecha": r["fecha"]} for i, r in enumerate(rows)]}
 
 @app.get("/api/pdf-chunks")
-def get_pdf_chunks():
-    """
-    Endpoint para listar los chunks de PDFs indexados en LanceDB.
-    """
+def get_pdf_chunks(project_id: str = "default"):
     db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mcp_hechos", "hechos_lancedb"))
     if not os.path.exists(db_path):
         return {"chunks": []}
@@ -188,6 +199,7 @@ def get_pdf_chunks():
     if not rows:
         return {"chunks": []}
 
+    rows = [r for r in rows if r.get("project_id", "default") == project_id]
     rows.sort(key=lambda x: (x.get("source_url", ""), x.get("chunk_index", 0)))
 
     return {"chunks": [
@@ -200,3 +212,54 @@ def get_pdf_chunks():
         }
         for r in rows
     ]}
+
+
+@app.get("/api/documents")
+def get_documents(project_id: str = "default"):
+    """List documents (papers) associated with a project via indexed chunks."""
+    db_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "mcp_hechos", "hechos_lancedb"))
+    papers_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "papers"))
+
+    # Get unique source_urls for this project from pdf_chunks
+    project_urls: set[str] = set()
+    if os.path.exists(db_path):
+        import lancedb
+        db = lancedb.connect(db_path)
+        if "pdf_chunks" in db.table_names():
+            rows = db.open_table("pdf_chunks").to_arrow().to_pylist()
+            for r in rows:
+                if r.get("project_id", "default") == project_id:
+                    project_urls.add(r.get("source_url", ""))
+
+    # Match URLs to local files and collect metadata
+    documents = []
+    for url in sorted(project_urls):
+        if not url:
+            continue
+        # Reconstruct filename the same way process_pdf does
+        import re
+        raw_filename = url.split("/")[-1].split("?")[0].split("#")[0]
+        clean_filename = re.sub(r'[^\w\d.\-]', '_', raw_filename)
+        if not clean_filename.lower().endswith(".pdf"):
+            clean_filename += ".pdf"
+        file_path = os.path.join(papers_dir, clean_filename)
+
+        chunks_count = sum(1 for r in rows if r.get("source_url") == url and r.get("project_id", "default") == project_id)
+        documents.append({
+            "filename": clean_filename,
+            "source_url": url,
+            "chunks": chunks_count,
+            "downloaded": os.path.exists(file_path),
+        })
+
+    return {"documents": documents}
+
+
+@app.get("/api/documents/download/{filename}")
+def download_document(filename: str):
+    """Serve a downloaded paper file."""
+    papers_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "papers"))
+    file_path = os.path.join(papers_dir, filename)
+    if not os.path.exists(file_path) or not os.path.abspath(file_path).startswith(papers_dir):
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path, media_type="application/pdf")

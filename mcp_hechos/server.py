@@ -27,41 +27,41 @@ def get_embedding(text: str) -> list[float]:
 mcp = FastMCP("ServidorHechosLanceDB")
 
 @mcp.tool()
-def guardar_si_es_hecho(texto: str) -> str:
+def guardar_si_es_hecho(texto: str, project_id: str = "default") -> str:
     """
     Guarda un texto en la base de datos de hechos vectoriales.
-    
-    El Agente LLM debería utilizar esta herramienta si, a su juicio, la frase del 
+
+    El Agente LLM debería utilizar esta herramienta si, a su juicio, la frase del
     usuario constituye un 'hecho' o información vital que debe ser recordada.
     """
     try:
         vector = get_embedding(texto)
         fecha = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        data = [{"texto": texto, "vector": vector, "fecha": fecha}]
-        
+        data = [{"texto": texto, "vector": vector, "fecha": fecha, "project_id": project_id}]
+
         if "hechos" not in db.table_names():
             db.create_table("hechos", data=data)
         else:
             tbl = db.open_table("hechos")
             tbl.add(data)
-            
+
         return f"✅ Hecho guardado y vectorizado en LanceDB: '{texto}'"
     except Exception as e:
         return f"❌ Error guardando hecho: {str(e)}"
 
 @mcp.tool()
-def search_best_hecho(query: str) -> str:
+def search_best_hecho(query: str, project_id: str = "default") -> str:
     """
     Busca el hecho más relevante en la BD de forma semántica usando embeddings.
     Retorna el hecho que más coincida con el significado de la búsqueda.
     """
     if "hechos" not in db.table_names():
         return "❌ La base de datos está vacía, no hay hechos."
-        
+
     try:
         query_vector = get_embedding(query)
         tbl = db.open_table("hechos")
-        results = tbl.search(query_vector).limit(1).to_list()
+        results = tbl.search(query_vector).where(f"project_id = '{project_id}'").limit(1).to_list()
         
         if results:
             mejor_hecho = results[0]["texto"]
@@ -72,20 +72,20 @@ def search_best_hecho(query: str) -> str:
         return f"❌ Error buscando hecho: {str(e)}"
 
 @mcp.tool()
-def rag_hechos(query: str) -> str:
+def rag_hechos(query: str, project_id: str = "default") -> str:
     """
     Retrieve index of pdf chunks that are relevant to the query, and return the text of those chunks as context.
-   
+
       - Use 'query' to semantically search for info of the previosly processed PDF.
       Requires the same 'url' that was passed to process_pdf.
     """
     if "hechos" not in db.table_names():
         return "❌ No hay contexto en la DB."
-        
+
     try:
         query_vector = get_embedding(query)
         tbl = db.open_table("hechos")
-        results = tbl.search(query_vector).limit(5).to_list()
+        results = tbl.search(query_vector).where(f"project_id = '{project_id}'").limit(5).to_list()
         
         if results:
             hechos = [res["texto"] for res in results]
@@ -96,7 +96,7 @@ def rag_hechos(query: str) -> str:
         return f"❌ Error recuperando contexto: {str(e)}"
 
 @mcp.tool()
-def rag_pdf(url: str, query: str = None, chunk_range: str = None) -> str:
+def rag_pdf(url: str, query: str = None, chunk_range: str = None, project_id: str = "default") -> str:
     """Read content from a PDF that was previously indexed with process_pdf.
 
     - Use 'chunk_range' (e.g. "5-10") to read specific sections from the structural map.
@@ -108,8 +108,8 @@ def rag_pdf(url: str, query: str = None, chunk_range: str = None) -> str:
         try:
             table = db.open_table("pdf_chunks")
             start, end = map(int, chunk_range.split('-'))
-            
-            filter_stmt = f"source_url = '{url}' AND chunk_index BETWEEN {start} AND {end}"
+
+            filter_stmt = f"source_url = '{url}' AND project_id = '{project_id}' AND chunk_index BETWEEN {start} AND {end}"
             
             results = table.search().where(filter_stmt).to_pandas().sort_values("chunk_index") # Critical to keep the text in order
             
@@ -126,7 +126,7 @@ def rag_pdf(url: str, query: str = None, chunk_range: str = None) -> str:
     if query:
         table = db.open_table("pdf_chunks")
         query_vec = get_embedding(query)
-        results = table.search(query_vec).where(f"source_url = '{url}'").limit(5).to_pandas()
+        results = table.search(query_vec).where(f"source_url = '{url}' AND project_id = '{project_id}'").limit(5).to_pandas()
         
         
         if results.empty:

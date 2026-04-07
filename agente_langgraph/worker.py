@@ -19,29 +19,13 @@ WORKER_SYSTEM_PROMPT = """Eres un trabajador de investigación. Tu tarea es segu
 """
 
 llm = ChatOpenAI(model="gpt-5.4-nano", temperature=0.0, streaming=True) # Asume OPENAI_API_KEY
+
 llm_with_tools = llm.bind_tools(local_tools)
 
 def worker_chatbot(state: WorkerState):
     return {
-        "messages": [
-            llm_with_tools.invoke(
-                [
-                    SystemMessage(
-                        content="""
-                        You are a research worker. Investigate this specific angle thoroughly.
-                        ANGLE: {angle}
-                        ORIGINAL QUESTION: {question}
-                        Use search_web, scrape_web, process_pdf, and rag_pdf_local.
-                        When done, write a detailed summary with [Source: URL] citations.
-                        """.format(
-                            angle=state["angle"],
-                            question=state["messages"][0].content if state["messages"] else "N/A")
-                    )
-                ]
-                + state["messages"]
-            )
-        ],
-        "iteration_count": state.get('iteration_count', 0) + 1
+        "messages": [llm_with_tools.invoke(state["messages"])],
+        "iteration_count": state.get('iteration_count', 0) + 1,
     }
 
 def collect_result(state: WorkerState):

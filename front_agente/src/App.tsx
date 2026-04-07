@@ -40,13 +40,26 @@ interface PdfChunk {
   fecha: string;
 }
 
-type Tab = 'chat' | 'memory' | 'pdfs';
+interface Project {
+  id: string;
+  name: string;
+  created_at: string;
+}
+
+interface Document {
+  filename: string;
+  source_url: string;
+  chunks: number;
+  downloaded: boolean;
+}
+
+type Tab = 'chat' | 'memory' | 'files' | 'docs';
 
 const SUGGESTIONS = [
-  '🔬 Summarize recent AI safety papers',
-  '📊 Compare transformer architectures',
-  '🧪 Find studies on protein folding',
-  '📝 Draft a literature review outline',
+  '🔬 Resumen de papers recientes sobre seguridad en IA',
+  '📊 Comparar arquitecturas de transformers',
+  '🧪 Buscar estudios sobre plegamiento de proteínas',
+  '📝 Crear un esquema de revisión de literatura',
 ];
 
 function App() {
@@ -65,34 +78,88 @@ function App() {
   const [pdfChunks, setPdfChunks] = useState<PdfChunk[]>([]);
   const [pdfChunksLoading, setPdfChunksLoading] = useState(false);
   const [selectedChunk, setSelectedChunk] = useState<PdfChunk | null>(null);
+  const [documents, setDocuments] = useState<Document[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProject, setCurrentProject] = useState<Project | null>(null);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [memoryPage, setMemoryPage] = useState(0);
+  const [filesPage, setFilesPage] = useState(0);
+  const PAGE_SIZE = 12;
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Load projects on mount
+  useEffect(() => {
+    fetch('http://localhost:8000/api/projects')
+      .then((res) => res.json())
+      .then((data: { projects: Project[] }) => {
+        setProjects(data.projects);
+        if (data.projects.length > 0 && !currentProject) {
+          setCurrentProject(data.projects[0]);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  // Reset chat when switching projects
+  const switchProject = (project: Project) => {
+    setCurrentProject(project);
+    setMessages([]);
+    setMemoryPage(0);
+    setFilesPage(0);
+  };
+
+  const createNewProject = async () => {
+    if (!newProjectName.trim()) return;
+    try {
+      const res = await fetch('http://localhost:8000/api/projects', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newProjectName }),
+      });
+      const project: Project = await res.json();
+      setProjects((prev) => [...prev, project]);
+      setCurrentProject(project);
+      setMessages([]);
+      setNewProjectName('');
+    } catch {}
+  };
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
   useEffect(() => {
+    if (!currentProject) return;
     if (activeTab === 'memory') {
       setHechosLoading(true);
-      fetch('http://localhost:8000/api/hechos')
+      fetch(`http://localhost:8000/api/hechos?project_id=${currentProject.id}`)
         .then((res) => res.json())
         .then((data: { hechos: Hecho[] }) => setHechos(data.hechos))
         .catch(() => setHechos([]))
         .finally(() => setHechosLoading(false));
     }
-    if (activeTab === 'pdfs') {
+    if (activeTab === 'files') {
       setPdfChunksLoading(true);
-      fetch('http://localhost:8000/api/pdf-chunks')
+      fetch(`http://localhost:8000/api/pdf-chunks?project_id=${currentProject.id}`)
         .then((res) => res.json())
         .then((data: { chunks: PdfChunk[] }) => setPdfChunks(data.chunks))
         .catch(() => setPdfChunks([]))
         .finally(() => setPdfChunksLoading(false));
     }
-  }, [activeTab]);
+    if (activeTab === 'docs') {
+      setDocsLoading(true);
+      fetch(`http://localhost:8000/api/documents?project_id=${currentProject.id}`)
+        .then((res) => res.json())
+        .then((data: { documents: Document[] }) => setDocuments(data.documents))
+        .catch(() => setDocuments([]))
+        .finally(() => setDocsLoading(false));
+    }
+  }, [activeTab, currentProject]);
 
   const sendMessage = async (text: string) => {
-    if (!text.trim() || loading) return;
+    if (!text.trim() || loading || !currentProject) return;
 
     setMessages((prev) => [
       ...prev,
@@ -116,7 +183,7 @@ function App() {
       const res = await fetch('http://localhost:8000/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ message: text, project_id: currentProject.id }),
       });
       if (!res.body) throw new Error('No response body');
 
@@ -215,6 +282,30 @@ function App() {
           <div className="logo-dot" />
           <span className="logo-text">RESEARCHER</span>
         </div>
+        <div className="project-selector">
+          <select
+            value={currentProject?.id || ''}
+            onChange={(e) => {
+              const p = projects.find((pr) => pr.id === e.target.value);
+              if (p) switchProject(p);
+            }}
+          >
+            {projects.length === 0 && <option value="">Sin proyectos</option>}
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <div className="new-project-row">
+            <input
+              type="text"
+              placeholder="Nuevo proyecto..."
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && createNewProject()}
+            />
+            <button onClick={createNewProject} disabled={!newProjectName.trim()}>+</button>
+          </div>
+        </div>
         <nav className="nav-tabs">
           <button
             className={`nav-tab ${activeTab === 'chat' ? 'active' : ''}`}
@@ -229,44 +320,101 @@ function App() {
             MEMORY
           </button>
           <button
-            className={`nav-tab ${activeTab === 'pdfs' ? 'active' : ''}`}
-            onClick={() => setActiveTab('pdfs')}
+            className={`nav-tab ${activeTab === 'docs' ? 'active' : ''}`}
+            onClick={() => setActiveTab('docs')}
           >
-            PDFs
+            DOCS
+          </button>
+          <button
+            className={`nav-tab ${activeTab === 'files' ? 'active' : ''}`}
+            onClick={() => setActiveTab('files')}
+          >
+            CHUNKS
           </button>
         </nav>
       </header>
 
       {/* Main content */}
-      {activeTab === 'pdfs' ? (
+      {activeTab === 'docs' ? (
+        <div className="memory-panel">
+          <div className="memory-icon">📑</div>
+          <h2 className="memory-heading">Documentos</h2>
+          <p className="memory-desc">
+            Papers y archivos descargados en este proyecto.
+          </p>
+          {docsLoading ? (
+            <div className="typing" style={{ justifyContent: 'center', padding: '2rem' }}>
+              <span /><span /><span />
+            </div>
+          ) : documents.length === 0 ? (
+            <p className="memory-desc">No hay documentos descargados aún.</p>
+          ) : (
+            <div className="hechos-list">
+              {documents.map((doc, i) => (
+                <div key={i} className="hecho-card doc-card">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <span style={{ fontSize: '1.2rem' }}>{doc.downloaded ? '📄' : '⏳'}</span>
+                    <strong style={{ fontSize: '14px', wordBreak: 'break-all' }}>{doc.filename}</strong>
+                  </div>
+                  <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)', wordBreak: 'break-all', marginBottom: '0.5rem' }}>
+                    {doc.source_url}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                    <span className="tool-badge local" style={{ fontSize: '0.7rem' }}>{doc.chunks} chunks</span>
+                    {doc.downloaded && (
+                      <a
+                        href={`http://localhost:8000/api/documents/download/${encodeURIComponent(doc.filename)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="doc-view-btn"
+                      >
+                        Abrir
+                      </a>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : activeTab === 'files' ? (
         <div className="memory-panel">
           <div className="memory-icon">📄</div>
-          <h2 className="memory-heading">PDF Chunks</h2>
+          <h2 className="memory-heading">Files Chunks</h2>
           <p className="memory-desc">
-            Indexed PDF chunks stored in the vector database. Click a card to see the full content.
+            Fragmentos de archivos indexados en la base de datos vectorial. Haz clic en una tarjeta para ver el contenido completo.
           </p>
           {pdfChunksLoading ? (
             <div className="typing" style={{ justifyContent: 'center', padding: '2rem' }}>
               <span /><span /><span />
             </div>
           ) : pdfChunks.length === 0 ? (
-            <p className="memory-desc">No PDF chunks indexed yet.</p>
+            <p className="memory-desc">No hay archivos indexados aún.</p>
           ) : (
-            <div className="hechos-list">
-              {pdfChunks.map((chunk, i) => (
-                <div key={i} className="hecho-card chunk-card" onClick={() => setSelectedChunk(chunk)}>
-                  <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
-                    <span className="tool-badge local" style={{ fontSize: '0.7rem' }}>Page {chunk.page}</span>
-                    <span className="tool-badge mcp" style={{ fontSize: '0.7rem' }}>Chunk {chunk.chunk_index}</span>
+            <>
+              <div className="hechos-list">
+                {pdfChunks.slice(filesPage * PAGE_SIZE, (filesPage + 1) * PAGE_SIZE).map((chunk, i) => (
+                  <div key={i} className="hecho-card chunk-card" onClick={() => setSelectedChunk(chunk)}>
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem', flexWrap: 'wrap' }}>
+                      <span className="tool-badge local" style={{ fontSize: '0.7rem' }}>Page {chunk.page}</span>
+                      <span className="tool-badge mcp" style={{ fontSize: '0.7rem' }}>Chunk {chunk.chunk_index}</span>
+                    </div>
+                    <p className="hecho-contenido chunk-preview">{chunk.texto}</p>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
+                      <span className="hecho-fecha" style={{ fontSize: '0.65rem', opacity: 0.6, wordBreak: 'break-all' }}>{chunk.source_url}</span>
+                      <span className="hecho-fecha">{chunk.fecha}</span>
+                    </div>
                   </div>
-                  <p className="hecho-contenido chunk-preview">{chunk.texto}</p>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                    <span className="hecho-fecha" style={{ fontSize: '0.65rem', opacity: 0.6, wordBreak: 'break-all' }}>{chunk.source_url}</span>
-                    <span className="hecho-fecha">{chunk.fecha}</span>
-                  </div>
+                ))}
+              </div>
+              {pdfChunks.length > PAGE_SIZE && (
+                <div className="pagination">
+                  <button disabled={filesPage === 0} onClick={() => setFilesPage((p) => p - 1)}>Anterior</button>
+                  <span className="pagination-info">{filesPage + 1} / {Math.ceil(pdfChunks.length / PAGE_SIZE)}</span>
+                  <button disabled={(filesPage + 1) * PAGE_SIZE >= pdfChunks.length} onClick={() => setFilesPage((p) => p + 1)}>Siguiente</button>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
 
           {selectedChunk && (
@@ -302,16 +450,25 @@ function App() {
               <span /><span /><span />
             </div>
           ) : hechos.length === 0 ? (
-            <p className="memory-desc">No memories yet.</p>
+            <p className="memory-desc">No hay memorias aún.</p>
           ) : (
-            <div className="hechos-list">
-              {hechos.map((h) => (
-                <div key={h.id} className="hecho-card">
-                  <p className="hecho-contenido">{h.contenido}</p>
-                  <span className="hecho-fecha">{h.fecha}</span>
+            <>
+              <div className="hechos-list">
+                {hechos.slice(memoryPage * PAGE_SIZE, (memoryPage + 1) * PAGE_SIZE).map((h) => (
+                  <div key={h.id} className="hecho-card">
+                    <p className="hecho-contenido">{h.contenido}</p>
+                    <span className="hecho-fecha">{h.fecha}</span>
+                  </div>
+                ))}
+              </div>
+              {hechos.length > PAGE_SIZE && (
+                <div className="pagination">
+                  <button disabled={memoryPage === 0} onClick={() => setMemoryPage((p) => p - 1)}>Anterior</button>
+                  <span className="pagination-info">{memoryPage + 1} / {Math.ceil(hechos.length / PAGE_SIZE)}</span>
+                  <button disabled={(memoryPage + 1) * PAGE_SIZE >= hechos.length} onClick={() => setMemoryPage((p) => p + 1)}>Siguiente</button>
                 </div>
-              ))}
-            </div>
+              )}
+            </>
           )}
         </div>
       ) : (
@@ -324,8 +481,8 @@ function App() {
                 is ready.
               </h1>
               <p className="welcome-sub">
-                Ask anything — from literature reviews to data analysis.
-                The agent decides which tools to use automatically.
+                Pregunta lo que sea — desde revisiones de literatura hasta análisis de datos.
+                El agente decide qué herramientas usar automáticamente.
               </p>
               <div className="suggestions">
                 {SUGGESTIONS.map((s) => (

@@ -78,10 +78,68 @@ body {
   color: var(--text);
 }
 
+.project-selector {
+  margin-left: 24px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-selector select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.new-project-row {
+  display: flex;
+  gap: 4px;
+}
+
+.new-project-row input {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  width: 130px;
+}
+
+.new-project-row input::placeholder {
+  color: var(--text-muted);
+}
+
+.new-project-row button {
+  background: var(--accent);
+  color: var(--bg);
+  border: none;
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.new-project-row button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .nav-tabs {
   display: flex;
   gap: 6px;
-  margin-left: 24px;
+  margin-left: auto;
 }
 
 .nav-tab {
@@ -509,6 +567,31 @@ body {
   color: var(--text-muted);
 }
 
+/* ── Document cards ── */
+
+.doc-card {
+  transition: border-color 0.15s;
+}
+
+.doc-view-btn {
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.7rem;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: rgba(61, 220, 132, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(61, 220, 132, 0.25);
+  text-decoration: none;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.doc-view-btn:hover {
+  background: rgba(61, 220, 132, 0.2);
+}
+
 /* ── Clickable chunk cards ── */
 
 .chunk-card {
@@ -621,4 +704,41 @@ body {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   gap: 12px;
+}
+
+/* ── Pagination ── */
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 20px;
+  padding-bottom: 20px;
+}
+
+.pagination button {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.pagination button:hover:not(:disabled) {
+  border-color: var(--accent-dim);
+}
+
+.pagination button:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.pagination-info {
+  font-size: 13px;
+  color: var(--text-dim);
 }

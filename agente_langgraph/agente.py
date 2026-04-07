@@ -6,7 +6,6 @@ from langgraph.types import Send
 from langchain_openai import ChatOpenAI
 from state import OverallState
 from worker import WORKER_SYSTEM_PROMPT, worker_subgraph
-from mcp_client import mcp_guardar_si_es_hecho
 
 
 load_dotenv()
@@ -35,20 +34,21 @@ def planner_node(state: OverallState) :
     if plan.needs_research:                                                                                                                                                                                                                      
         return {"research_angles": plan.angles}
     else:                                                                                                                                                                                                                                        
-        return {"messages": [AIMessage(content=plan.direct_response)]}
+        return {"messages": [AIMessage(content=plan.direct_response)], "research_angles": []}
 
 def route_after_planner(state: OverallState):
     if len(state.get("research_angles") or []) > 0:
+        question = next(m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
         return [
-            Send("research_worker", {                                                                                                                                                                                                                
+            Send("research_worker", {
                 "messages": [
-                SystemMessage(content=WORKER_SYSTEM_PROMPT),                                                                                                                                                                                     
-                next(m.content for m in reversed(state["messages"]) if isinstance(m, HumanMessage))
-            ],                                                                                                                                                                                                                                   
-            "angle": angle,
-            "iteration_count": 0,                                                                                                                                                                                                                
-          })                                                                                                                                                                                                                                       
-          for angle in state["research_angles"]
+                    SystemMessage(content=WORKER_SYSTEM_PROMPT),
+                    HumanMessage(content=f"ÁNGULO: {angle}\nPREGUNTA: {question}"),
+                ],
+                "angle": angle,
+                "iteration_count": 0,
+            })
+            for angle in state["research_angles"]
         ]
     else:
         return END
@@ -74,12 +74,6 @@ async def synthesizer_node(state: OverallState):
         Sintetiza estos hallazgos en una respuesta final en español con citas.""")
 
     response = await llm_synthe.ainvoke([synthesis_prompt])
-
-    # Persist the synthesized summary to MCP memory so future turns can recall it
-    try:
-        await mcp_guardar_si_es_hecho(response.content)
-    except Exception as e:
-        print(f"[synthesizer] mcp_guardar_si_es_hecho failed: {e}")
 
     return {"messages": [response]}
 
