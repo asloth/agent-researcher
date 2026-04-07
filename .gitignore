@@ -21,6 +21,10 @@ Thumbs.db
 # Databases (local dev)
 *.db
 *.lancedb/
+lancedb/
+
+# PDFs
+*.pdf
 
 # Misc
 *.log
