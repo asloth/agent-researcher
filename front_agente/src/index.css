@@ -136,6 +136,62 @@ body {
   cursor: default;
 }
 
+.chat-selector {
+  margin-left: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-selector select {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  max-width: 220px;
+}
+
+.chat-selector select:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-action-btn {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  width: 28px;
+  height: 28px;
+  font-size: 16px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: inherit;
+  transition: border-color 0.15s;
+}
+
+.chat-action-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chat-action-btn.danger:hover:not(:disabled) {
+  border-color: #d44;
+  color: #d44;
+}
+
+.chat-action-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
 .nav-tabs {
   display: flex;
   gap: 6px;

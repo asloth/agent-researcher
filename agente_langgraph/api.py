@@ -3,15 +3,30 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
+from contextlib import asynccontextmanager
 import os
 
-from agente import graph
+import agente
+from agente import compile_graph
 from langchain_core.messages import HumanMessage
 from mcp_client import mcp_lifespan
 from projects import list_projects, create_project, delete_project
+from chats import list_chats, create_chat, delete_chat
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
-# Pasamos el manejador asíncrono que inicializa y destruye MCP limpiamente
-app = FastAPI(title="Agente Educacional MCP y LangGraph", lifespan=mcp_lifespan)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Compose: bring up the AsyncSqliteSaver-backed graph + the MCP client lifespan."""
+    db_path = os.path.join(os.path.dirname(__file__), "checkpoints.db")
+    async with AsyncSqliteSaver.from_conn_string(db_path) as checkpointer:
+        agente.graph = compile_graph(checkpointer)
+        async with mcp_lifespan(app):
+            yield
+        agente.graph = None
+
+
+app = FastAPI(title="Agente Educacional MCP y LangGraph", lifespan=lifespan)
 
 # Habilitamos CORS para que los frontends (React) nos puedan consultar
 app.add_middleware(
@@ -24,9 +39,14 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     message: str
     project_id: str
+    chat_id: str | None = None
 
 
 class ProjectCreate(BaseModel):
+    name: str
+
+
+class ChatCreate(BaseModel):
     name: str
 
 
@@ -46,6 +66,41 @@ def remove_project(project_id: str):
         raise HTTPException(status_code=404, detail="Project not found")
     return {"ok": True}
 
+
+@app.get("/api/projects/{project_id}/chats")
+def get_chats(project_id: str):
+    return {"chats": list_chats(project_id)}
+
+
+@app.post("/api/projects/{project_id}/chats")
+def post_chat(project_id: str, req: ChatCreate):
+    return create_chat(project_id, req.name)
+
+
+@app.delete("/api/chats/{chat_id}")
+def remove_chat(chat_id: str):
+    if not delete_chat(chat_id):
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return {"ok": True}
+
+
+@app.get("/api/chats/{chat_id}/messages")
+async def get_chat_messages(chat_id: str, project_id: str):
+    """Rehydrate the user-visible history for a chat from the LangGraph checkpoint."""
+    config = {"configurable": {"thread_id": chat_id, "project_id": project_id}}
+    state = await agente.graph.aget_state(config)
+    if not state or not state.values:
+        return {"messages": []}
+    msgs = state.values.get("messages", [])
+    output = []
+    for m in msgs:
+        cls = m.__class__.__name__
+        if cls == "HumanMessage":
+            output.append({"role": "user", "content": m.content})
+        elif cls == "AIMessage" and m.content:
+            output.append({"role": "agent", "content": m.content})
+    return {"messages": output}
+
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
@@ -53,10 +108,11 @@ async def chat_endpoint(request: ChatRequest):
     Retorna tanto la respuesta textual como el historial detallado de las Tools que usó.
     """
     try:
-        config = {"configurable": {"thread_id": request.project_id, "project_id": request.project_id}}
+        thread_id = request.chat_id or request.project_id
+        config = {"configurable": {"thread_id": thread_id, "project_id": request.project_id}}
 
         input_message = HumanMessage(content=request.message)
-        result = await graph.ainvoke({"messages": [input_message]}, config)
+        result = await agente.graph.ainvoke({"messages": [input_message]}, config)
         
         # Procesamos solo la porción nueva del historial, omitiendo cosas de turnos anteriores
         new_messages = result["messages"]
@@ -109,7 +165,8 @@ async def chat_stream_endpoint(request: ChatRequest):
       - {"type": "done"}                          graph finished
       - {"type": "error", "message": "..."}       something blew up
     """
-    config = {"configurable": {"thread_id": request.project_id, "project_id": request.project_id}}
+    thread_id = request.chat_id or request.project_id
+    config = {"configurable": {"thread_id": thread_id, "project_id": request.project_id}}
     input_message = HumanMessage(content=request.message)
 
     async def event_generator():
@@ -117,7 +174,7 @@ async def chat_stream_endpoint(request: ChatRequest):
             return f"data: {json.dumps(payload)}\n\n"
 
         try:
-            async for mode, chunk in graph.astream(
+            async for mode, chunk in agente.graph.astream(
                 {"messages": [input_message]},
                 config,
                 stream_mode=["updates", "messages"],

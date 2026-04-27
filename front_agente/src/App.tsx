@@ -46,6 +46,13 @@ interface Project {
   created_at: string;
 }
 
+interface Chat {
+  id: string;
+  project_id: string;
+  name: string;
+  created_at: string;
+}
+
 interface Document {
   filename: string;
   source_url: string;
@@ -83,6 +90,8 @@ function App() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProject, setCurrentProject] = useState<Project | null>(null);
   const [newProjectName, setNewProjectName] = useState('');
+  const [chats, setChats] = useState<Chat[]>([]);
+  const [currentChat, setCurrentChat] = useState<Chat | null>(null);
   const [memoryPage, setMemoryPage] = useState(0);
   const [filesPage, setFilesPage] = useState(0);
   const PAGE_SIZE = 12;
@@ -102,10 +111,12 @@ function App() {
       .catch(() => {});
   }, []);
 
-  // Reset chat when switching projects
+  // Reset chat list & messages when switching projects
   const switchProject = (project: Project) => {
     setCurrentProject(project);
     setMessages([]);
+    setChats([]);
+    setCurrentChat(null);
     setMemoryPage(0);
     setFilesPage(0);
   };
@@ -122,7 +133,81 @@ function App() {
       setProjects((prev) => [...prev, project]);
       setCurrentProject(project);
       setMessages([]);
+      setChats([]);
+      setCurrentChat(null);
       setNewProjectName('');
+    } catch {}
+  };
+
+  // Load chats whenever the project changes
+  useEffect(() => {
+    if (!currentProject) return;
+    fetch(`http://localhost:8000/api/projects/${currentProject.id}/chats`)
+      .then((res) => res.json())
+      .then((data: { chats: Chat[] }) => {
+        setChats(data.chats);
+        // auto-select most recent chat (first in list, since backend orders by created_at DESC)
+        if (data.chats.length > 0) {
+          setCurrentChat(data.chats[0]);
+        } else {
+          setCurrentChat(null);
+          setMessages([]);
+        }
+      })
+      .catch(() => {
+        setChats([]);
+        setCurrentChat(null);
+      });
+  }, [currentProject]);
+
+  // Rehydrate messages whenever the chat changes
+  useEffect(() => {
+    if (!currentChat || !currentProject) {
+      setMessages([]);
+      return;
+    }
+    fetch(
+      `http://localhost:8000/api/chats/${currentChat.id}/messages?project_id=${currentProject.id}`
+    )
+      .then((res) => res.json())
+      .then((data: { messages: { role: 'user' | 'agent'; content: string }[] }) => {
+        setMessages(data.messages.map((m) => ({ role: m.role, content: m.content })));
+      })
+      .catch(() => setMessages([]));
+  }, [currentChat]);
+
+  const createNewChat = async (defaultName?: string): Promise<Chat | null> => {
+    if (!currentProject) return null;
+    const name = defaultName ?? window.prompt('Nombre del nuevo chat:', 'Nuevo chat');
+    if (!name || !name.trim()) return null;
+    try {
+      const res = await fetch(
+        `http://localhost:8000/api/projects/${currentProject.id}/chats`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name.trim() }),
+        }
+      );
+      const chat: Chat = await res.json();
+      setChats((prev) => [chat, ...prev]);
+      setCurrentChat(chat);
+      setMessages([]);
+      return chat;
+    } catch {
+      return null;
+    }
+  };
+
+  const deleteCurrentChat = async () => {
+    if (!currentChat) return;
+    if (!window.confirm(`¿Eliminar chat "${currentChat.name}"?`)) return;
+    try {
+      await fetch(`http://localhost:8000/api/chats/${currentChat.id}`, { method: 'DELETE' });
+      const remaining = chats.filter((c) => c.id !== currentChat.id);
+      setChats(remaining);
+      setCurrentChat(remaining[0] ?? null);
+      if (remaining.length === 0) setMessages([]);
     } catch {}
   };
 
@@ -161,6 +246,14 @@ function App() {
   const sendMessage = async (text: string) => {
     if (!text.trim() || loading || !currentProject) return;
 
+    // Auto-create a chat on first message if none exists yet — name = first 40 chars
+    let chat = currentChat;
+    if (!chat) {
+      const autoName = text.trim().slice(0, 40) + (text.trim().length > 40 ? '…' : '');
+      chat = await createNewChat(autoName);
+      if (!chat) return;
+    }
+
     setMessages((prev) => [
       ...prev,
       { role: 'user', content: text },
@@ -183,7 +276,7 @@ function App() {
       const res = await fetch('http://localhost:8000/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text, project_id: currentProject.id }),
+        body: JSON.stringify({ message: text, project_id: currentProject.id, chat_id: chat.id }),
       });
       if (!res.body) throw new Error('No response body');
 
@@ -305,6 +398,37 @@ function App() {
             />
             <button onClick={createNewProject} disabled={!newProjectName.trim()}>+</button>
           </div>
+        </div>
+        <div className="chat-selector">
+          <select
+            value={currentChat?.id || ''}
+            onChange={(e) => {
+              const c = chats.find((ch) => ch.id === e.target.value);
+              if (c) setCurrentChat(c);
+            }}
+            disabled={!currentProject || chats.length === 0}
+          >
+            {chats.length === 0 && <option value="">Sin chats</option>}
+            {chats.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          <button
+            className="chat-action-btn"
+            onClick={() => createNewChat()}
+            disabled={!currentProject}
+            title="Nuevo chat"
+          >
+            +
+          </button>
+          <button
+            className="chat-action-btn danger"
+            onClick={deleteCurrentChat}
+            disabled={!currentChat}
+            title="Eliminar chat actual"
+          >
+            ×
+          </button>
         </div>
         <nav className="nav-tabs">
           <button
