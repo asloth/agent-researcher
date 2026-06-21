@@ -1,5 +1,13 @@
 # Agent Researcher
 
+![Python](https://img.shields.io/badge/Python_3.14-3776AB?style=flat&logo=python&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?style=flat&logo=langchain&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=flat&logo=fastapi&logoColor=white)
+![React](https://img.shields.io/badge/React_19-61DAFB?style=flat&logo=react&logoColor=black)
+![LanceDB](https://img.shields.io/badge/LanceDB-embedded-FF6B6B?style=flat)
+![MCP](https://img.shields.io/badge/MCP-stdio-7B61FF?style=flat)
+![License](https://img.shields.io/badge/License-MIT-green?style=flat)
+
 An autonomous research agent built with **LangGraph**, **FastAPI**, and **React**. It uses an **Orchestrator-Workers** architecture where a planner decomposes questions into research angles, dispatches parallel worker agents with tool access, and synthesizes findings into a cited response.
 
 Inspired by Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents).
