@@ -67,7 +67,10 @@ uv sync                                  # creates .venv from pyproject.toml / u
 cd front_agente && npm install && cd ..
 ```
 
-Without uv, install the dependencies listed in `pyproject.toml` with pip (`pip install -e .` does not work here, because the repo has no package layout for setuptools):
+<details>
+<summary>Without uv (pip)</summary>
+
+Install the dependencies listed in `pyproject.toml` with pip. `pip install -e .` fails in this repo because it has no package layout for setuptools.
 
 ```bash
 python3.14 -m venv .venv
@@ -75,6 +78,10 @@ source .venv/bin/activate
 python -c "import tomllib; print('\n'.join(tomllib.load(open('pyproject.toml','rb'))['project']['dependencies']))" \
   | pip install -r /dev/stdin
 ```
+
+With this route, activate the venv in the backend terminal (`source .venv/bin/activate` from the repository root) and run `uvicorn api:app --reload` instead of `uv run uvicorn api:app --reload`.
+
+</details>
 
 ### 2. Add your API keys
 
@@ -93,16 +100,18 @@ These are the two keys the code needs. Model names, ports and paths are set in t
 
 ### 3. Run it (two terminals)
 
+Both terminals start from the repository root (`agent-researcher/`).
+
 ```bash
-# terminal 1: backend on http://localhost:8000
+# terminal 1, from the repository root: backend on http://localhost:8000
 cd agente_langgraph
 uv run uvicorn api:app --reload
 ```
 
-Start the backend from inside `agente_langgraph/`. The modules import each other by bare name (`from state import ...`), and downloaded PDFs are saved to a `papers/` folder relative to the current directory. On startup the backend also launches the MCP server (`mcp_hechos/server.py`) as a subprocess. If you activated the venv yourself, `uvicorn api:app --reload` is enough.
+The `cd agente_langgraph` step is required: the backend must run from that folder. The modules import each other by bare name (`from state import ...`), and downloaded PDFs are saved to a `papers/` folder relative to the current directory. On startup the backend also launches the MCP server (`mcp_hechos/server.py`) as a subprocess.
 
 ```bash
-# terminal 2: frontend on http://localhost:5173
+# terminal 2, from the repository root: frontend on http://localhost:5173
 cd front_agente
 npm run dev
 ```
@@ -414,7 +423,7 @@ agent-researcher/
 │   └── package.json            # React 19, Vite 7, react-markdown
 │
 ├── projects.json               # Project list
-├── pyproject.toml              # Python dependencies (used by uv sync / pip install -e .)
+├── pyproject.toml              # Python dependencies (installed by uv sync)
 └── .python-version             # 3.14
 ```
 
