@@ -7,7 +7,7 @@
 ![LanceDB](https://img.shields.io/badge/LanceDB-embedded-FF6B6B?style=flat)
 ![MCP](https://img.shields.io/badge/MCP-stdio-7B61FF?style=flat)
 
-A research assistant you run locally. You ask a question; it splits the question into 3–5 research angles, sends one worker agent after each angle in parallel (web search, page scraping, PDF indexing), and merges what they found into one answer with source links. Research is grouped into projects, and each project keeps its own chats, remembered facts and indexed PDFs.
+A research assistant you run locally. You ask a question; it splits the question into research angles (typically 3–5), sends one worker agent after each angle in parallel (web search, page scraping, PDF indexing), and merges what they found into one answer with source links. Research is grouped into projects, and each project keeps its own chats, remembered facts and indexed PDFs.
 
 Built with **LangGraph** (planner → parallel workers → synthesizer), **FastAPI** with Server-Sent Events, **React**, and **LanceDB**. The design follows the Orchestrator-Workers pattern from Anthropic's [Building Effective Agents](https://www.anthropic.com/engineering/building-effective-agents).
 
@@ -18,7 +18,7 @@ Built with **LangGraph** (planner → parallel workers → synthesizer), **FastA
 ```
 question ─► PLANNER ──(already known / small talk)──► direct answer
                │
-               └─(needs research: 3-5 angles)
+               └─(needs research: typically 3-5 angles)
                      │
           ┌──────────┼──────────┐
           ▼          ▼          ▼
@@ -31,7 +31,7 @@ question ─► PLANNER ──(already known / small talk)──► direct answe
                 MEMORY NODE ──► saves durable facts for this project
 ```
 
-1. **Planner** reads the chat history and the project's saved facts. If the answer is already there, or the message is small talk, it replies directly. Otherwise it returns 3–5 research angles.
+1. **Planner** reads the chat history and the project's saved facts. If the answer is already there, or the message is small talk, it replies directly. Otherwise it returns a list of research angles. Its prompt asks for 3–5; the output schema doesn't enforce a count.
 2. **Workers** run in parallel, one per angle. Each one searches the web with Tavily, summarizes pages, and downloads and indexes PDFs so it can search inside them.
 3. **Synthesizer** combines the workers' findings and sources into one cited answer.
 4. **Memory node** decides whether the exchange contains a lasting fact (a goal, a constraint, something about you) and stores it in the project's memory, where the planner will find it next time.
@@ -39,7 +39,7 @@ question ─► PLANNER ──(already known / small talk)──► direct answe
 ## What you see in the app
 
 - **Projects and chats.** A top bar to create or switch projects, and a chat selector inside each project. Sending the first message creates a chat named after it. Chat history is saved and reloads when you switch back.
-- **Live progress.** While a question is being researched, the reply shows a `PLAN:` row with one badge per angle. Each badge is marked done when its worker finishes, along with how many sources it found. Then the final answer streams in.
+- **Live progress.** While a question is being researched, the reply shows a `PLAN:` row with one badge per angle. Each badge is marked done when its worker finishes, along with how many sources it cited: the `[Source: URL]` references in the worker's final answer, which can be fewer than the pages it visited. Then the final answer streams in.
 - **MEMORY tab.** Facts the agent saved for the current project, newest first.
 - **DOCS tab.** PDFs indexed in the current project, with their chunk count and a download link.
 - **CHUNKS tab.** The raw text chunks stored for those PDFs, with page and chunk numbers.
@@ -85,7 +85,12 @@ With this route, activate the venv in the backend terminal (`source .venv/bin/ac
 
 ### 2. Add your API keys
 
-The backend and the MCP server both read `agente_langgraph/.env`. Copy the template that ships with the repo and fill in the two keys:
+The backend and the MCP server both load `agente_langgraph/.env`. The code needs two keys:
+
+- `OPENAI_API_KEY`: read by the OpenAI and LangChain clients (`ChatOpenAI`, `OpenAI()`) for every LLM and embedding call.
+- `TAVILY_API_KEY`: read with `os.getenv("TAVILY_API_KEY")` in `agente_langgraph/local_tools.py` for `search_web`.
+
+A template is tracked at `agente_langgraph/.env.example`. Copy it, or create the file yourself, and set both keys:
 
 ```bash
 cp agente_langgraph/.env.example agente_langgraph/.env
@@ -96,7 +101,7 @@ OPENAI_API_KEY="your-openai-key"
 TAVILY_API_KEY="your-tavily-key"
 ```
 
-These are the two keys the code needs. Model names, ports and paths are set in the source files.
+Model names, ports and paths are set in the source files.
 
 ### 3. Run it (two terminals)
 
@@ -126,7 +131,7 @@ npm run dev
 
 ## Cost and limitations
 
-**API cost.** Every researched question triggers many paid calls. Per question: one planner call, 3–5 workers that can each make up to 6 LLM calls and several Tavily searches (`search_depth="advanced"`), one summary call per scraped web page, embedding calls for every indexed PDF, one synthesizer call and one memory call. A direct answer costs much less: the planner call, the memory call and a few embedding calls. The code uses these OpenAI models, so your key needs access to them:
+**API cost.** Every researched question triggers many paid calls. As an illustration, with a typical plan of 3–5 angles: one planner call, then one worker per angle, each making up to 6 LLM calls (the worker loop limit in `worker.py`) plus whatever Tavily searches (`search_depth="advanced"`) it decides to run, one summary call per scraped web page, embedding calls for every indexed PDF, one synthesizer call and one memory call. The number of angles is set by the planner's prompt and is not capped in code, so a question can fan out to more workers and cost more. A direct answer costs much less: the planner call, the memory call and a few embedding calls. The code uses these OpenAI models, so your key needs access to them:
 
 | Where | Model |
 |---|---|
@@ -141,7 +146,7 @@ npm run dev
 - The frontend calls `http://localhost:8000` directly (hard-coded in `front_agente/src/App.tsx`); there is no setting to point it elsewhere.
 - The API has no authentication and allows CORS from any origin. Do not expose it to a network.
 - All storage is local files: `projects.json`, `agente_langgraph/checkpoints.db` (chats, SQLite), `mcp_hechos/hechos_lancedb/` (facts and PDF chunks), `agente_langgraph/papers/` and `agente_langgraph/pdf_index.json`.
-- The repository currently includes data from development: entries in `projects.json`, LanceDB tables and some downloaded PDFs. A fresh clone will show those projects in the app.
+- The repository currently includes data from development: entries in `projects.json`, LanceDB tables and some downloaded PDFs. A fresh clone may show those projects in the app, with their saved facts and indexed documents. Chat history is not guaranteed: `checkpoints.db` itself is not tracked in git (only stray `-shm`/`-wal` files are), so those projects' chats can be missing or empty.
 - There is no test suite.
 
 **Known gaps in the current code.**
@@ -175,7 +180,7 @@ npm run dev
 │  │  ┌──────────┐  no research                                  │    │
 │  │  │ PLANNER  │──────────────────────────────┐                │    │
 │  │  └──────────┘                              │                │    │
-│  │     │ needs research (3-5 angles)          │                │    │
+│  │     │ needs research (typ. 3-5 angles)     │                │    │
 │  │     ▼  Send() fan-out                      │                │    │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐    │                │    │
 │  │  │ WORKER 1 │ │ WORKER 2 │ │ WORKER N │    │  (parallel)    │    │
@@ -218,11 +223,11 @@ Retrieves the top 5 saved facts for the project that match the latest user messa
 ```python
 class PlannerOutput(BaseModel):
     needs_research: bool        # research required?
-    angles: list[str]           # 3-5 investigation angles
+    angles: list[str]           # populated if needs_research=True, else []
     direct_response: str | None # answer directly if no research needed
 ```
 
-- `needs_research=True` → sets `research_angles` and fans out to workers with `Send()`
+- `needs_research=True` → sets `research_angles` and fans out to workers with `Send()`, one per angle. The prompt asks for 3–5 angles; nothing in the schema or graph limits the count.
 - `needs_research=False` → returns `direct_response` and goes to the memory node
 - The prompt tells it to prefer answering from history or memory over launching new research.
 - Model: `gpt-5.4-mini` (temperature 0.2)
@@ -410,7 +415,7 @@ agent-researcher/
 │   ├── mcp_client.py           # MCP subprocess lifecycle and tool wrappers
 │   ├── projects.py             # Project CRUD (projects.json)
 │   ├── chats.py                # Chat CRUD (SQLite)
-│   ├── .env.example            # Template for OPENAI_API_KEY and TAVILY_API_KEY
+│   ├── .env.example            # Tracked template for agente_langgraph/.env
 │   ├── pdf_index.json          # Cache of processed PDFs
 │   └── papers/                 # Downloaded PDFs
 │
