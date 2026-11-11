@@ -1,5 +1,7 @@
 # Conoce a tu nuevo Asistente Inteligente (Versión para Principiantes)
 
+> **Nota:** este documento describe una versión anterior del proyecto; algunas herramientas y pasos que menciona ya no existen. La instalación y la arquitectura actuales están en el [README principal](README.md).
+
 ¡Bienvenido! Este proyecto es mucho más que un simple "ChatGPT". Lo que tienes aquí es un sistema educativo diseñado para mostrarte cómo la Inteligencia Artificial está evolucionando de ser un simple "oráculo que responde preguntas" a convertirse en un **Agente Autónomo**.
 
 Si no tienes experiencia programando, ¡no te preocupes! Esta guía te explicará los conceptos clave de este proyecto usando analogías muy sencillas.
