@@ -1,5 +1,7 @@
 # Proyecto Educacional: Servidor MCP "Hechos"
 
+> **Nota:** este documento describe una versión anterior del proyecto; algunas herramientas y pasos que menciona ya no existen. La instalación y la arquitectura actuales están en el [README principal](../README.md).
+
 Este es un ejemplo mínimo de un servidor **Model Context Protocol (MCP)** desarrollado en Python.
 
 ## ¿Qué es MCP?

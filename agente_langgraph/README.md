@@ -1,5 +1,7 @@
 # Proyecto Educacional: Agente LangGraph + MCP
 
+> **Nota:** este documento describe una versión anterior del proyecto; algunas herramientas y pasos que menciona ya no existen. La instalación y la arquitectura actuales están en el [README principal](../README.md).
+
 Este componente es el "Cerebro" del sistema. Utiliza **LangGraph** para orquestar la toma de decisiones del Agente de IA.
 
 ## ¿Qué hace especial a este Agente?

@@ -1,5 +1,7 @@
 # Proyecto Educacional: Chat del Agente de IA
 
+> **Nota:** este documento describe una versión anterior del proyecto; algunas herramientas y pasos que menciona ya no existen. La instalación y la arquitectura actuales están en el [README principal](../README.md).
+
 Esta aplicación React de una sola página (SPA) hace de cliente conversacional para tu Agente **LangGraph** (backend de FastAPI).
 
 ## Características principales
